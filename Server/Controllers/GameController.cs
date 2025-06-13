@@ -188,7 +188,7 @@ namespace Paulov.Tarkov.WebServer.DOTNET.Controllers
 
             if (requestBody["nickname"].ToString().Length < 3)
             {
-                await HttpBodyConverters.CompressIntoResponseBodyBSG(null, Request, Response, 256, "The nickname is too short");
+                await HttpBodyConverters.CompressIntoResponseBodyBSG(null, Response, 256, "The nickname is too short");
                 return null;
             }
             //else if (saveProvider.NameExists(requestBody["nickname"].ToString()))
@@ -292,7 +292,7 @@ namespace Paulov.Tarkov.WebServer.DOTNET.Controllers
             Dictionary<string, object> nullResult = new();
             nullResult.Add("equipmentBuilds", new JArray());
             nullResult.Add("weaponBuilds", new JArray());
-            await HttpBodyConverters.CompressIntoResponseBodyBSG(JsonConvert.SerializeObject(nullResult), Request, Response);
+            await HttpBodyConverters.CompressIntoResponseBodyBSG(JsonConvert.SerializeObject(nullResult), Response);
 
         }
 
@@ -323,21 +323,21 @@ namespace Paulov.Tarkov.WebServer.DOTNET.Controllers
             Dictionary<string, object> packetResult = new();
             //packetResult.Add("_id", $"{SessionId}");
             //packetResult.Add("suites", saveProvider.GetAccountProfileMode(SessionId).Characters.PMC.Suits);
-            await HttpBodyConverters.CompressIntoResponseBodyBSG(JsonConvert.SerializeObject(packetResult), Request, Response);
+            await HttpBodyConverters.CompressIntoResponseBodyBSG(JsonConvert.SerializeObject(packetResult), Response);
         }
 
         [Route("client/friend/request/list/inbox")]
         [HttpPost]
         public async void FriendRequestInbox(int? retry, bool? debug)
         {
-            await HttpBodyConverters.CompressIntoResponseBodyBSG(JsonConvert.SerializeObject(new JArray()), Request, Response);
+            await HttpBodyConverters.CompressIntoResponseBodyBSG(JsonConvert.SerializeObject(new JArray()), Response);
         }
 
         [Route("client/friend/request/list/outbox")]
         [HttpPost]
         public async void FriendRequestOutbox(int? retry, bool? debug)
         {
-            await HttpBodyConverters.CompressIntoResponseBodyBSG(JsonConvert.SerializeObject(new JArray()), Request, Response);
+            await HttpBodyConverters.CompressIntoResponseBodyBSG(JsonConvert.SerializeObject(new JArray()), Response);
         }
 
         [Route("client/friend/list")]
@@ -356,7 +356,7 @@ namespace Paulov.Tarkov.WebServer.DOTNET.Controllers
         public async void ServerList(int? retry, bool? debug)
         {
             var packets = new List<Dictionary<string, object>>();
-            await HttpBodyConverters.CompressIntoResponseBodyBSG(JsonConvert.SerializeObject(packets), Request, Response);
+            await HttpBodyConverters.CompressIntoResponseBodyBSG(JsonConvert.SerializeObject(packets), Response);
         }
 
         [Route("client/match/group/current")]
@@ -612,7 +612,7 @@ namespace Paulov.Tarkov.WebServer.DOTNET.Controllers
             var result = new Dictionary<string, object>();
             result.Add("Test", new { id = "test", availableCount = 1, availableUntil = int.MaxValue, experience = 1, isUnlocked = true });
 
-            await HttpBodyConverters.CompressIntoResponseBodyBSG(JsonConvert.SerializeObject(result), Request, Response);
+            await HttpBodyConverters.CompressIntoResponseBodyBSG(JsonConvert.SerializeObject(result), Response);
         }
 
         /// <summary>

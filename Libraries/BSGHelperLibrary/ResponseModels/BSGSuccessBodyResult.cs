@@ -173,7 +173,7 @@ namespace BSGHelperLibrary.ResponseModels
         {
             ArgumentNullException.ThrowIfNull(context);
 
-            return HttpBodyConverters.CompressStringIntoResponseBody(CreateResponseBody(), context.HttpContext.Request, context.HttpContext.Response);
+            return HttpBodyConverters.CompressStringIntoResponseBody(CreateResponseBody(), context.HttpContext.Response);
         }
     }
 }

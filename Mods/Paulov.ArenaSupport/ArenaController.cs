@@ -34,7 +34,7 @@ namespace SIT.Arena
 
             var result = Array.Empty<object>();
 
-            await HttpBodyConverters.CompressIntoResponseBodyBSG(JsonConvert.SerializeObject(result), Request, Response);
+            await HttpBodyConverters.CompressIntoResponseBodyBSG(JsonConvert.SerializeObject(result), Response);
         }
 
         [Route("client/arena/presets")]
@@ -53,7 +53,7 @@ namespace SIT.Arena
             result.Add("presets", Array.Empty<object>());
             result.Add("presetTypes", Array.Empty<object>());
 
-            await HttpBodyConverters.CompressIntoResponseBodyBSG(JsonConvert.SerializeObject(result), Request, Response);
+            await HttpBodyConverters.CompressIntoResponseBodyBSG(JsonConvert.SerializeObject(result), Response);
         }
 
         /// <summary>
@@ -72,7 +72,7 @@ namespace SIT.Arena
 
             var result = Array.Empty<ArenaCustomGameBaseInfo>();
 
-            await HttpBodyConverters.CompressIntoResponseBodyBSG(JsonConvert.SerializeObject(result), Request, Response);
+            await HttpBodyConverters.CompressIntoResponseBodyBSG(JsonConvert.SerializeObject(result), Response);
         }
     }
 }

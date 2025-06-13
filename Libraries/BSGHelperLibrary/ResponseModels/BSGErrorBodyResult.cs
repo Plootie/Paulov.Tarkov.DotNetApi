@@ -64,7 +64,7 @@ namespace BSGHelperLibrary.ResponseModels
 
             var responseText = "{ \"err\": " + ErrorCode + ", \"errmsg\": \"" + ErrorMessage + "\", \"data\": null }";
 
-            return HttpBodyConverters.CompressStringIntoResponseBody(responseText, context.HttpContext.Request, context.HttpContext.Response);
+            return HttpBodyConverters.CompressStringIntoResponseBody(responseText, context.HttpContext.Response);
         }
     }
 }

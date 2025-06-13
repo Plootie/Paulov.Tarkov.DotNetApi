@@ -17,7 +17,7 @@ namespace Paulov.Tarkov.WebServer.DOTNET.Controllers
         [HttpPost]
         public async void Find(int? retry, bool? debug)
         {
-            await HttpBodyConverters.CompressIntoResponseBodyBSG(new { }, Request, Response);
+            await HttpBodyConverters.CompressIntoResponseBodyBSG(new { }, Response);
         }
     }
 }
