@@ -13,6 +13,7 @@ using System.Dynamic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Net.Mime;
 using System.Text;
 using System.Threading.Tasks;
 using BSGHelperLibrary;
@@ -22,7 +23,13 @@ namespace Paulov.Tarkov.WebServer.DOTNET.Middleware
 {
     public static class HttpBodyConverters
     {
-        public static bool IsCompressed(byte[] data)
+        private static readonly JsonSerializerSettings _serializerSettings = new()
+        {
+            Converters = [new Newtonsoft.Json.Converters.StringEnumConverter()],
+            ReferenceLoopHandling = ReferenceLoopHandling.Ignore
+        };
+        
+        public static bool IsZlibCompressed(byte[] data)
         {
             // We need the first two bytes;
             // First byte: Info (CM/CINFO) Header, should always be 0x78.
@@ -41,7 +48,7 @@ namespace Paulov.Tarkov.WebServer.DOTNET.Middleware
             return false;
         }
 
-        public static bool IsCompressed(Stream stream)
+        public static bool IsZlibCompressed(Stream stream)
         {
             long streamPosition = stream.Position;
             byte[] buffer = ArrayPool<byte>.Shared.Rent(2);
@@ -50,7 +57,7 @@ namespace Paulov.Tarkov.WebServer.DOTNET.Middleware
                 stream.Seek(0, SeekOrigin.Begin);
                 int read = stream.Read(buffer, 0, 2);
                 stream.Seek(streamPosition, SeekOrigin.Begin);
-                return read == 2 && IsCompressed(buffer); //Gracefully handle no data without needing to clear buffer
+                return read == 2 && IsZlibCompressed(buffer); //Gracefully handle no data without needing to clear buffer
             }
             finally
             {
@@ -58,19 +65,23 @@ namespace Paulov.Tarkov.WebServer.DOTNET.Middleware
             }
         }
 
-        public static bool IsHttpRequestFromTarkov(HttpRequest request)
+        public static bool HeadersAreFromTarkov(StringValues contentEncodings, StringValues userAgents)
         {
-            return (request.Headers.TryGetValue("Content-Encoding", out StringValues contentEncoding) &&
-                    contentEncoding.Contains("deflate"))
-                   || (request.Headers.TryGetValue("user-agent", out StringValues userAgent) &&
-                       userAgent.Any(x => x.StartsWith("Unity")));
+            return contentEncodings.Contains("deflate") || userAgents.Any(x => x.StartsWith("Unity"));
+        }
+
+        public static bool HeadersAreFromTarkov(IHeaderDictionary header)
+        {
+            return header.TryGetValue("Content-Encoding", out StringValues contentEncoding) &&
+                   header.TryGetValue("user-agent", out StringValues userAgent) &&
+                   HeadersAreFromTarkov(contentEncoding, userAgent);
         }
 
         public static Stream DecompressRequestBodyToStream(HttpRequest request)
         {
             if(!request.Body.CanSeek) request.EnableBuffering();
             request.Body.Seek(0, SeekOrigin.Begin);
-            return IsCompressed(request.Body) ? new ZLibStream(request.Body, CompressionMode.Decompress) : request.Body;
+            return IsZlibCompressed(request.Body) ? new ZLibStream(request.Body, CompressionMode.Decompress) : request.Body;
         }
 
         public static async Task<byte[]> DecompressRequestBodyToBytes(HttpRequest request)
@@ -102,47 +113,24 @@ namespace Paulov.Tarkov.WebServer.DOTNET.Middleware
 
         public static async Task CompressDictionaryIntoResponseBody(Dictionary<string, object> dictionary, HttpRequest request, HttpResponse response)
         {
-            await CompressStringIntoResponseBody(JsonConvert.SerializeObject(dictionary
-
-                , new JsonSerializerSettings()
-                {
-                    Converters = new[] { new Newtonsoft.Json.Converters.StringEnumConverter() }
-                    ,
-                    ReferenceLoopHandling = ReferenceLoopHandling.Ignore,
-                }
-
-                ), request, response);
+            await CompressStringIntoResponseBody(JsonConvert.SerializeObject(dictionary, _serializerSettings), response);
         }
 
-        public static async Task CompressStringIntoResponseBody(string stringToConvert, HttpRequest request, HttpResponse response)
+        public static async Task CompressStringIntoResponseBody(string stringToConvert, HttpResponse response)
         {
+            if(response.Headers.IsReadOnly) throw new InvalidOperationException("Response headers are not read-only");
+            response.Headers.ContentType = MediaTypeNames.Application.Json;
+            response.Headers.ContentEncoding = "deflate";
+            response.StatusCode = 200;
+
+            // Zlib compress the data
             if (!string.IsNullOrEmpty(stringToConvert))
             {
                 stringToConvert = stringToConvert.Trim();
+                await using MemoryStream ms = new(Encoding.UTF8.GetBytes(stringToConvert));
+                await using ZLibStream zlibStream = new(response.BodyWriter.AsStream(), CompressionLevel.Optimal);
+                await ms.CopyToAsync(zlibStream);
             }
-
-            if (!response.Headers.IsReadOnly)
-            {
-                // Must send application/json responses
-                if (!response.Headers.TryGetValue("content-type", out StringValues contentType) || !contentType.Equals("application/json"))
-                    response.Headers.ContentType = "application/json";
-
-                // If we are not Unity / Tarkov, then instruct client to deflate
-                if (request.Headers.TryGetValue("user-agent", out StringValues userAgent) && !userAgent.ToString().StartsWith("Unity"))
-                    response.Headers.ContentEncoding = "deflate";
-            }
-            response.StatusCode = 200;
-
-            // Zlib Compress the String
-            if (!string.IsNullOrEmpty(stringToConvert))
-            {
-                //TODO: Look at streaming this instead of waiting for the entire compression before sending our response
-                byte[] bytes = SimpleZlib.CompressToBytes(stringToConvert, 6);
-                response.Headers.ContentLength = bytes.Length;
-                await response.BodyWriter.WriteAsync(new ReadOnlyMemory<byte>(bytes));
-            }
-
-            GC.Collect();
         }
 
         public static async Task CompressNullIntoResponseBodyBSG(HttpRequest request, HttpResponse response)
@@ -154,23 +142,23 @@ namespace Paulov.Tarkov.WebServer.DOTNET.Middleware
             await CompressDictionaryIntoResponseBody(BSGResponse, request, response);
         }
 
-        public static async Task CompressIntoResponseBodyBSG<T>(T model, HttpRequest request, HttpResponse response)
+        public static async Task CompressIntoResponseBodyBSG<T>(T model, HttpResponse response)
         {
-            await CompressIntoResponseBodyBSG(model.SITToJson(), request, response);
+            await CompressIntoResponseBodyBSG(await model.SITToJsonAsync(), response);
         }
 
-        public static async Task CompressIntoResponseBodyBSG(string data, HttpRequest request, HttpResponse response, int errorCode, string errorMessage)
+        public static async Task CompressIntoResponseBodyBSG(string data, HttpResponse response, int errorCode, string errorMessage)
         {
             var resp = "{ 'err': " + errorCode + ", 'errmsg': " + errorMessage + ", 'data': " + data + " }";
-            await CompressStringIntoResponseBody(resp, request, response);
+            await CompressStringIntoResponseBody(resp, response);
         }
 
 
-        public static async Task CompressIntoResponseBodyBSG(string data, HttpRequest request, HttpResponse response)
+        public static async Task CompressIntoResponseBodyBSG(string data, HttpResponse response)
         {
             data = SanitizeJson(data);
             var resp = "{ 'err': 0, 'errmsg':null, 'data': " + data + " }";
-            await CompressStringIntoResponseBody(resp, request, response);
+            await CompressStringIntoResponseBody(resp, response);
         }
 
         public static string SanitizeJson(string json)
