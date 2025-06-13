@@ -5,31 +5,30 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using SIT.BSGHelperLibrary;
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Dynamic;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using BSGHelperLibrary;
 using Microsoft.Extensions.Primitives;
 
 namespace Paulov.Tarkov.WebServer.DOTNET.Middleware
 {
     public static class HttpBodyConverters
     {
-        public static bool IsCompressed(byte[] Data)
+        public static bool IsCompressed(byte[] data)
         {
             // We need the first two bytes;
-            // First byte:  Info (CM/CINFO) Header, should always be 0x78
+            // First byte: Info (CM/CINFO) Header, should always be 0x78.
             // Second byte: Flags (FLG) Header, should define our compression level.
+            if (data.Length < 2 || data[0] != 0x78) return false;
 
-            if (Data == null || Data.Length < 3 || Data[0] != 0x78)
-            {
-                return false;
-            }
-
-            switch (Data[1])
+            switch (data[1])
             {
                 case 0x01:  // fastest
                 case 0x5E:  // low
@@ -41,176 +40,63 @@ namespace Paulov.Tarkov.WebServer.DOTNET.Middleware
             return false;
         }
 
+        public static bool IsCompressed(Stream stream)
+        {
+            long streamPosition = stream.Position;
+            byte[] buffer = ArrayPool<byte>.Shared.Rent(2);
+            try
+            {
+                stream.Seek(0, SeekOrigin.Begin);
+                int read = stream.Read(buffer, 0, 2);
+                stream.Seek(streamPosition, SeekOrigin.Begin);
+                return read == 2 && IsCompressed(buffer); //Gracefully handle no data without needing to clear buffer
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
+        }
+
+        public static bool IsHttpRequestFromTarkov(HttpRequest request)
+        {
+            return (request.Headers.TryGetValue("Content-Encoding", out StringValues contentEncoding) &&
+                    contentEncoding.Contains("deflate"))
+                   || (request.Headers.TryGetValue("user-agent", out StringValues userAgent) &&
+                       userAgent.Any(x => x.StartsWith("Unity")));
+        }
+
+        public static Stream DecompressRequestBodyToStream(HttpRequest request)
+        {
+            if(!request.Body.CanSeek) request.EnableBuffering();
+            request.Body.Seek(0, SeekOrigin.Begin);
+            return IsCompressed(request.Body) ? new ZLibStream(request.Body, CompressionMode.Decompress) : request.Body;
+        }
+
         public static async Task<byte[]> DecompressRequestBodyToBytes(HttpRequest request)
         {
-            if (!request.Body.CanSeek)
-                request.EnableBuffering();
-
-            {
-
-            }
-
-            request.Body.Position = 0;
-            var reader = new StreamReader(request.Body, Encoding.UTF8);
-            var body = await reader.ReadToEndAsync().ConfigureAwait(false);
-            request.Body.Position = 0;
-
-            if (IsCompressed(((MemoryStream)request.Body).ToArray()))
-            {
-
-            }
-
-            // This is the only way to handle Zlib versus Standard Json calls
-            try
-            {
-                using ZLibStream zLibStream = new(request.Body, CompressionMode.Decompress);
-                byte[] buffer = new byte[4096];
-                await zLibStream.ReadAsync(buffer, 0, buffer.Length);
-                return buffer;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine(ex.ToString());
-                Debug.WriteLine(ex.ToString());
-            }
-
-            try
-            {
-                return Encoding.UTF8.GetBytes(body);
-            }
-            catch
-            {
-                return null;
-            }
+            await using Stream decompressedStream = DecompressRequestBodyToStream(request);
+            using MemoryStream ms = new();
+            await decompressedStream.CopyToAsync(ms);
+            return ms.ToArray();
         }
 
         public static async Task<Dictionary<string, object>> DecompressRequestBodyToDictionary(HttpRequest request)
         {
-            if (!request.Body.CanSeek)
-                request.EnableBuffering();
-
-            request.Body.Position = 0;
-            var reader = new StreamReader(request.Body, Encoding.UTF8);
-            var body = await reader.ReadToEndAsync().ConfigureAwait(false);
-            request.Body.Position = 0;
-
-            // If we are Unity / Tarkov
-            if (
-                (request.Headers.ContainsKey("Content-Encoding") && request.Headers["Content-Encoding"] == "deflate")
-                || (request.Headers.ContainsKey("user-agent") && request.Headers["user-agent"].ToString().StartsWith("Unity"))
-                )
-            {
-                // This is the only way to handle Zlib versus Standard Json calls
-                try
-                {
-                    using ZLibStream zLibStream = new(request.Body, CompressionMode.Decompress);
-                    byte[] buffer = new byte[4096];
-                    await zLibStream.ReadAsync(buffer, 0, buffer.Length);
-                    var str = Encoding.UTF8.GetString(buffer);
-                    var resultDict = JsonConvert.DeserializeObject<Dictionary<string, object>>(str);
-                    if (resultDict != null)
-                        return resultDict;
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine(ex.ToString());
-                    Debug.WriteLine(ex.ToString());
-                }
-            }
-
-
-            if (body.StartsWith('{') || body.StartsWith('['))
-                return JsonConvert.DeserializeObject<Dictionary<string, object>>(body);
-
-            if (body.Contains('&'))
-            {
-                Dictionary<string, object> dictSplitItems = new Dictionary<string, object>();
-                var splitBody = body.Split('&');
-                foreach (var splitItem in splitBody)
-                {
-                    if (splitItem.Split('=').Length > 1)
-                        dictSplitItems.Add(splitItem.Split('=')[0], splitItem.Split('=')[1]);
-                }
-                return dictSplitItems;
-            }
+            await using Stream decompressedStream = DecompressRequestBodyToStream(request);
+            using StreamReader sr = new(decompressedStream);
+            string body = await sr.ReadToEndAsync();
+            
+            if (PlootJsonHelper.IsJsonObject(body)) return JsonConvert.DeserializeObject<Dictionary<string, object>>(body);
 
             return null;
-
         }
 
         public static async Task<T> DecompressRequestBodyToType<T>(HttpRequest request)
         {
-            if (!request.Body.CanSeek)
-                request.EnableBuffering();
-
-            request.Body.Position = 0;
-            var reader = new StreamReader(request.Body, Encoding.UTF8);
-            var body = await reader.ReadToEndAsync().ConfigureAwait(false);
-            request.Body.Position = 0;
-
-            // This is the only way to handle Zlib versus Standard Json calls
-            try
-            {
-                using ZLibStream zLibStream = new(request.Body, CompressionMode.Decompress);
-                byte[] buffer = new byte[4096];
-                await zLibStream.ReadAsync(buffer, 0, buffer.Length);
-                var str = Encoding.UTF8.GetString(buffer);
-                if (BSGJsonHelpers.TrySITParseJson(str, out T result))
-                    return result;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine(ex.ToString());
-                Debug.WriteLine(ex.ToString());
-            }
-
-
-            if ((body.StartsWith('{') || body.StartsWith('[')) && BSGJsonHelpers.TrySITParseJson(body, out T rBodyResult))
-                return rBodyResult;
-
-            return default(T);
-        }
-
-        public static async Task<(string, dynamic)> DecompressRequestBody(HttpRequest request)
-        {
-            if (!request.Body.CanSeek)
-                request.EnableBuffering();
-
-            request.Body.Position = 0;
-            var reader = new StreamReader(request.Body, Encoding.UTF8);
-            string resultString = await reader.ReadToEndAsync().ConfigureAwait(false);
-            request.Body.Position = 0;
-
-            dynamic resultDynamic = new ExpandoObject();
-
-            // This is the only way to handle Zlib versus Standard Json calls
-            try
-            {
-                using ZLibStream zLibStream = new(request.Body, CompressionMode.Decompress);
-                byte[] buffer = new byte[4096];
-                await zLibStream.ReadAsync(buffer, 0, buffer.Length);
-                resultString = Encoding.UTF8.GetString(buffer);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine(ex.ToString());
-                Debug.WriteLine(ex.ToString());
-            }
-
-            try
-            {
-                if (resultString.StartsWith("{"))
-                    resultDynamic = JObject.Parse(resultString);
-                else if (resultString.StartsWith("["))
-                    resultDynamic = JArray.Parse(resultString);
-            }
-            catch
-            {
-            }
-
-            return (resultString, resultDynamic);
-
-
+            string body = Encoding.UTF8.GetString(await DecompressRequestBodyToBytes(request));
+            T ret = default;
+            if (PlootJsonHelper.IsJsonObject(body)) body.TrySITParseJson(out ret);
+            return ret;
         }
 
         public static async Task CompressDictionaryIntoResponseBody(Dictionary<string, object> dictionary, HttpRequest request, HttpResponse response)

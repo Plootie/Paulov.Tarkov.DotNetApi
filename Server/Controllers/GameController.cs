@@ -259,8 +259,6 @@ namespace Paulov.Tarkov.WebServer.DOTNET.Controllers
         [HttpPost]
         public async Task<IActionResult> Weather(int? retry)
         {
-            var requestBody = await HttpBodyConverters.DecompressRequestBody(Request);
-
             var weather = new WeatherClass()
             {
                 Time = DateTime.Now.Ticks,
